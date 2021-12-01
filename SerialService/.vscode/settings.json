@@ -1,0 +1,6 @@
+{
+    "cmake.configureOnOpen": false,
+    "files.associations": {
+        "serialmanager.h": "c"
+    }
+}
