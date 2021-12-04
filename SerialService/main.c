@@ -1,3 +1,11 @@
+/*==========================================================================*
+ * Autor: Lucas Zalazar <lucas.zalazar6@gmail.com>							*
+ * Subject: Sistemas operativos de proposito general - CESE					*
+ * 																			*	
+ * 																			*
+ * Date: 2021/10/30															*
+ *==========================================================================*/
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
@@ -41,26 +49,75 @@
 #define MSG_SIGNAL_SIGTERM "Se envió la señal SIGTERM!!\n\r"
 #define SIZE_MSG_SIGTERM sizeof(MSG_SIGNAL_SIGTERM)
 
-/*
- *****************************************************************************************************************
- * Seteo estado de salidas (hacia la edu-ciaa)																	 *
- * “>OUTS:X,Y,W,Z\r\n”																							 *				
- * Siendo X,Y,W,Z el estado de cada salida. Los estados posibles son ““0” (apagado),”1”(encendido) o “2” (blink) *
-******************************************************************************************************************
-* Evento pulsador (desde la edu-ciaa)																			 *			
-* “>TOGGLE STATE:X\r\n”																							 *
-* Siendo X el número de pulsador (0,1, 2 o 3)																	 *			
-******************************************************************************************************************
-*/
-
 pthread_mutex_t mutexData = PTHREAD_MUTEX_INITIALIZER;
 
+/* Buffers de entrada y salida */
 char pDataReceived[SIZE_MSG_IN];
 char pDataSend[SIZE_MSG_OUT];
 char buffer[SIZE_MSG_TCP_IN];
 char bufferOutTCP[SIZE_MSG_TCP_OUT];
 
 int tcpfd;
+
+void bloquearSign(void)
+{
+	sigset_t set;
+	
+	if (sigemptyset(&set) == -1)
+	{
+		perror("sigemptyset");
+		exit(EXIT_FAILURE);
+	}
+	
+	if (sigaddset(&set, SIGINT) == -1)
+	{
+		perror("sigaddset");
+		exit(EXIT_FAILURE);
+	}
+	
+	if (sigaddset(&set, SIGTERM) == -1)
+	{
+		perror("sigaddset");
+		exit(EXIT_FAILURE);
+	}
+
+	/* Verificar retorno de error */
+	if (pthread_sigmask(SIG_BLOCK, &set, NULL) == -1)
+	{
+		perror("pthread_sigmask");
+		exit(EXIT_FAILURE);
+	}
+}
+
+void desbloquearSign(void)
+{
+	sigset_t set;
+	
+	if (sigemptyset(&set) == -1)
+	{
+		perror("sigemptyset");
+		exit(EXIT_FAILURE);
+	}
+	
+	if (sigaddset(&set, SIGINT) == -1)
+	{
+		perror("sigaddset");
+		exit(EXIT_FAILURE);
+	}
+	
+	if (sigaddset(&set, SIGTERM) == -1)
+	{
+		perror("sigaddset");
+		exit(EXIT_FAILURE);
+	}
+
+	/* Verificar retorno de error */
+	if (pthread_sigmask(SIG_UNBLOCK, &set, NULL) == -1)
+	{
+		perror("pthread_sigmask");
+		exit(EXIT_FAILURE);
+	}
+}
 
 /* Manejo de Signals SIGINT o SIGTERM */
 void sigint_handler(int sig)
@@ -70,9 +127,11 @@ void sigint_handler(int sig)
 		if (close(tcpfd) == 0)
 		{
 			printf("Cierro puerto TCP\n\r");
+
 			serial_close();
 			printf("Cierro puerto serie\n\r");
 
+			/* Imprimo mensaje segun señal entrante */
 			switch (sig)
 			{
 			case SIGINT:
@@ -84,129 +143,147 @@ void sigint_handler(int sig)
 			default:
 				break;
 			}
-
+			/* Termino ejecucion de programa */
 			exit(EXIT_SUCCESS);
 		}
 		else
 		{
 			perror("close");
-			printf("No se pueden cerrar conexiones, reintentar ...\n\r");
+			printf("No se pueden cerrar conexiones\n\r");
 		}
 	}
 }
 
 int init_serial(void)
 {
-	int n;
+	/* Se abre puerto serie para recepcion y envío de comandos desde CIAA */
 	if (serial_open(COM_PORT_NUMBER, COM_BAUDRATE) == 0)
 	{
 		printf("Se abre el puerto correctamente\n");
-		n = 0;
+		return 0;
 	}
 	else
 	{
 		printf("Error: No se abre el puerto correctamente\n");
-		n = -1;
+		return -1;
 	}
-
-	/* Inicio con todos los leds apagados */
-	if ((serial_receive(pDataReceived, SIZE_MSG_IN + 1)) == -1)
-	{
-		printf("Error: No se puede escribir el puerto\n");
-		n = -1;
-	}
-	else
-	{
-		n = 0;
-	}
-	return n;
 }
 
-void *serial_wr_thread(void *param)
+void *serial_wr_thread(void* message)
 {
+	printf ("%s\n", (const char *) message);
+	sleep(1);
+
 	while (1)
 	{
-		/**************************
-		* Lecutra de puerto serie *
-		***************************/
-
+		//		***************************
+		//		* Lecutra de puerto serie *
+		//		***************************
 		if ((serial_receive(pDataReceived, SIZE_MSG_IN + 1)) != -1)
 		{
-			/* Recibo mensaje de estado de leds */
+			/* Chequeo que mensaje de estado de leds sea del formato correcto */
 			if (strncmp(">TOGGLE STATE:", pDataReceived, sizeof(">TOGGLE STATE:") - 1 /*SIZE_MSG_IN - 4*/) == 0)
 			{
+				printf("Mensaje recibido por serie: ");
+				/* Imprimo mensaje enviado */
+				printf("%s", pDataReceived);
+				/* Verifico que fd de TCP exista */
 				if (tcpfd != -1)
 				{
+					/* Sector critico para escritura y lectura de datos en variables */
 					pthread_mutex_lock(&mutexData);
 
 					/* ":LINEXTG\n" */
 					strncpy(bufferOutTCP, MSG_TCP_OUT_PROTOTYPE, SIZE_MSG_TCP_OUT);
 
+					/* Chequeo que mensaje recibido sea valido */
 					if ((pDataReceived[POS_CMD_IN] >= '0') && (pDataReceived[POS_CMD_IN] <= '3'))
 					{
+						/* Reemplazo caracter con el valor de la linea modificado en CIAA */
 						bufferOutTCP[POS_CMD_TCP_OUT] = pDataReceived[POS_CMD_IN];
 
-						if (send(tcpfd, bufferOutTCP, SIZE_MSG_TCP_OUT, 0) == -1)
+						/* Envio mensaje por socket tcp */
+						if (write(tcpfd, bufferOutTCP, SIZE_MSG_TCP_OUT) == -1)
 						{
 							perror("SERVER TCP: Error mensaje enviado\r\n");
 							exit(EXIT_FAILURE);
 						}
 					}
+					/* Imprimo mensaje enviado */
+					printf("Mensaje enviado por socket: ");
+					printf("%s", bufferOutTCP);
+					/* Finalizo zona critica de escritura y lectura de variables */
 					pthread_mutex_unlock(&mutexData);
 				}
+				/* Limpio buffer */
 				memset(bufferOutTCP, 0, SIZE_MSG_TCP_OUT);
 			}
 		}
-
+		/* Recibo mensaje de confirmacion de comando enviado hacia la CIAA */
 		if ((serial_receive(pDataReceived, sizeof(">OK") + 1)) != -1)
 		{
 			/* Recibo mensaje de respuesta correcta por comando enviado desde PC */
 			if (strncmp(">OK", pDataReceived, sizeof(">OK") - 1 /*SIZE_MSG_IN - 4*/) == 0)
 			{
+				printf("Mensaje recibido por serie: ");
 				printf("%s", pDataReceived);
 			}
 		}
+		/* Limpio buffer de recepcion */
 		memset(pDataReceived, 0, SIZE_MSG_IN);
 
+		/* Retardo bloqueante para que el consumo de CPU no se vaya al 100% */
 		usleep(10000);
 	}
 }
 
-void *tcp_client_thread(void *param)
+void *tcp_client_thread(void* message)
 {
+	printf ("%s\n", (const char *) message);
+	sleep(1);
+
 	socklen_t addr_len;
 	struct sockaddr_in clientaddr;
 	struct sockaddr_in serveraddr;
 
 	bool connected = false;
 	int n;
+	int s;
 
-	// Creamos socket
-	int s = socket(PF_INET, SOCK_STREAM, 0);
+	/* Creacion socket del socket */
+	if ((s = socket(PF_INET, SOCK_STREAM, 0)) == -1)
+	{
+		perror("socket");
+		fprintf(stderr, "SERVER TCP: ERROR invalid socket\r\n");
+		exit(EXIT_FAILURE);
+	}
+	printf("SERVER TCP: Socket creado correctamente\n\r");
 
-	// Cargamos datos de IP:PORT del server
+	/* Cargamos datos de IP:PORT del server */
 	bzero((char *)&serveraddr, sizeof(serveraddr));
 	serveraddr.sin_family = AF_INET;
 	serveraddr.sin_port = htons(TCP_PORT_SERVER);
 	serveraddr.sin_addr.s_addr = inet_addr(TCP_IP);
+
+	/* Chequeo de direccion cargada */
 	if (serveraddr.sin_addr.s_addr == INADDR_NONE)
 	{
 		perror("inet_addr");
-		fprintf(stderr, "ERROR invalid server IP\r\n");
-		return (void *)1;
+		fprintf(stderr, "SERVER TCP: ERROR invalid server IP\r\n");
+		exit(EXIT_FAILURE);
 	}
 	printf("SERVER TCP: Servidor creado correctamente\n\r");
 
 	int yes = 1;
 
-	// lose the pesky "Address already in use" error message
+	/* Fuerzo la reutilizacion de la direccion que ya esta en uso */
 	if (setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof yes) == -1)
 	{
 		perror("setsockopt");
-		exit(1);
+		exit(EXIT_FAILURE);
 	}
 
-	// Abrimos puerto con bind()
+	/* Abrimos puerto con bind() */
 	if (bind(s, (struct sockaddr *)&serveraddr, sizeof(serveraddr)) == -1)
 	{
 		close(s);
@@ -215,7 +292,7 @@ void *tcp_client_thread(void *param)
 	}
 	printf("SERVER TCP: Puerto abierto correctamente\n\r");
 
-	// Seteamos socket en modo Listening
+	/* Seteamos socket en modo Listening */
 	if (listen(s, 10) == -1) // backlog=10
 	{
 		perror("listen");
@@ -225,10 +302,9 @@ void *tcp_client_thread(void *param)
 
 	while (true)
 	{
-		// Ejecutamos accept() para recibir conexiones entrantes
-		addr_len = sizeof(struct sockaddr_in);
-
 		printf("SERVER TCP: Esperando por una nueva conexion\n\r");
+		/* Ejecutamos accept() para recibir conexiones entrantes */
+		addr_len = sizeof(struct sockaddr_in);
 		if ((tcpfd = accept(s, (struct sockaddr *)&clientaddr, &addr_len)) == -1)
 		{
 			perror("accept");
@@ -244,42 +320,62 @@ void *tcp_client_thread(void *param)
 
 		while (connected)
 		{
-			// Leemos mensaje de cliente
-			if ((n = recv(tcpfd, buffer, sizeof(MSG_TCP_IN_PROTOTYPE), 0)) == -1)
+			printf("SERVER TCP: Esperando respuesta!\n\r");
+			/* Lecutra de mensaje de cliente entrante */
+			n = read(tcpfd, buffer, SIZE_MSG_TCP_IN);
+
+			/* Cantidad de bytes recibidos */
+			printf("SERVER TCP: Cantidad de bytes n = %d\n\r", n);
+
+			if (n > 0)
 			{
-				perror("recv");
-				connected = false;
+				//			*****************************
+				//			* Escritura de puerto serie *
+				//			*****************************
+				/* Comienzo zona critica de lectura y escritura de variables */
+				pthread_mutex_lock(&mutexData);
+
+				if (strncmp(":STATES", buffer, sizeof(":STATES") - 1) == 0)
+				{
+					printf("SERVER TCP: Mensaje recibido por socket: ");
+					/* Imprimo mensaje recibido */
+					printf("%s", buffer);
+
+					/* ">OUTS:X,Y,W,Z\r\n" */
+					strncpy(pDataSend, MSG_OUT_PROTOTYPE, SIZE_MSG_OUT);
+
+					/* Reemplazo comandos en buffer a enviar */
+					pDataSend[6] = buffer[7];
+					pDataSend[8] = buffer[8];
+					pDataSend[10] = buffer[9];
+					pDataSend[12] = buffer[10];
+
+					/* Envio comandos */
+					serial_send(pDataSend, SIZE_MSG_OUT);
+
+					printf("Mensaje enviado por serie: ");
+					/* Imprimo mensaje recibido */
+					printf("%s", pDataSend);
+
+					/* Limpio buffer luego de enviar */
+					memset(buffer, 0, SIZE_MSG_OUT);
+				}
+				/* Finaliza zona critica de lectura y escritura de variables */
+				pthread_mutex_unlock(&mutexData);
 			}
-			if (n == 0)
+			else if (n == 0)
 			{
-				printf("Lecturas pendientes = %d\n\r", n);
+				printf("SERVER TCP: Se desconecto el cliente\n\r");
+				connected = false;
 				break;
 			}
-
-			/****************************
-			* Escritura de puerto serie *
-			*****************************/
-			pthread_mutex_lock(&mutexData);
-
-			if (strncmp(":STATES", buffer, sizeof(":STATES") - 1) == 0)
+			else if (n < 0)
 			{
-				printf("%s", buffer);
-				/* ">OUTS:X,Y,W,Z\r\n" */
-				strncpy(pDataSend, MSG_OUT_PROTOTYPE, SIZE_MSG_OUT);
-
-				/* Envio de comandos */
-				pDataSend[6] = buffer[7];
-				pDataSend[8] = buffer[8];
-				pDataSend[10] = buffer[9];
-				pDataSend[12] = buffer[10];
-
-				serial_send(pDataSend, SIZE_MSG_OUT);
-				memset(buffer, 0, SIZE_MSG_OUT);
+				perror("recv");
+				exit(EXIT_FAILURE);
 			}
-			pthread_mutex_unlock(&mutexData);
 		}
 	}
-	// Cerramos conexion con cliente
 	close(tcpfd);
 	return (void *)0;
 }
@@ -291,7 +387,7 @@ int main(void)
 	struct sigaction sa;
 
 	sa.sa_handler = sigint_handler;
-	sa.sa_flags = 0; //SA_RESTART;
+	sa.sa_flags = 0;
 	sigemptyset(&sa.sa_mask);
 
 	if ((sigaction(SIGINT, &sa, NULL) == -1) || (sigaction(SIGTERM, &sa, NULL) == -1))
@@ -310,9 +406,15 @@ int main(void)
 
 	pthread_t thread_tcp;
 	pthread_t thread_serial;
+	
+	const char *messageTCP = "thread_tcp";
+	const char *messageSerial = "thread_serial";
+
+	printf("Bloqueo signal\n");
+	bloquearSign();
 
 	/* Creacion de thread para lectura del puerto serie */
-	ret = pthread_create(&thread_serial, NULL, serial_wr_thread, NULL);
+	ret = pthread_create(&thread_serial, NULL, serial_wr_thread, (void *)messageSerial);
 
 	/* Chequeo de creacion del hilo */
 	if (ret)
@@ -323,7 +425,7 @@ int main(void)
 	}
 
 	/* Creacion de thread para lectura del puerto serie */
-	ret = pthread_create(&thread_tcp, NULL, tcp_client_thread, NULL);
+	ret = pthread_create(&thread_tcp, NULL, tcp_client_thread, (void *)messageSerial);
 
 	/* Chequeo de creacion del hilo */
 	if (ret)
@@ -332,11 +434,21 @@ int main(void)
 		perror("pthread_create");
 		return -1;
 	}
+
+	printf("Desbloqueo signal\n");
+	desbloquearSign();
 
 	while (1)
 	{
 		usleep(10000);
 	}
+
+	/* Cerramos conexion con cliente */
+	close(tcpfd);
+	printf("Cierro puerto TCP\n\r");
+
+	serial_close();
+	printf("Cierro puerto serie\n\r");
 
 	exit(EXIT_SUCCESS);
 	return 0;
