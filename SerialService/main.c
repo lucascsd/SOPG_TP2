@@ -325,7 +325,7 @@ void *tcp_client_thread(void* message)
 			n = read(tcpfd, buffer, SIZE_MSG_TCP_IN);
 
 			/* Cantidad de bytes recibidos */
-			printf("SERVER TCP: Cantidad de bytes n = %d\n\r", n);
+			printf("SERVER TCP: Cantidad de bytes n = %d y mensaje %s\n\r", n, buffer);
 
 			if (n > 0)
 			{
@@ -425,7 +425,7 @@ int main(void)
 	}
 
 	/* Creacion de thread para lectura del puerto serie */
-	ret = pthread_create(&thread_tcp, NULL, tcp_client_thread, (void *)messageSerial);
+	ret = pthread_create(&thread_tcp, NULL, tcp_client_thread, (void *)messageTCP);
 
 	/* Chequeo de creacion del hilo */
 	if (ret)
